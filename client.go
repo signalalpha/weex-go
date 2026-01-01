@@ -67,7 +67,7 @@ func WithTimeout(timeout time.Duration) ClientOption {
 // NewClient creates a new WEEX API client with the given options
 func NewClient(opts ...ClientOption) (*Client, error) {
 	cfg := DefaultConfig()
-	
+
 	client := &Client{
 		apiKey:     cfg.APIKey,
 		secretKey:  cfg.SecretKey,
@@ -180,7 +180,7 @@ func (c *Client) parseResponse(resp *http.Response, result interface{}) error {
 				Body:       fmt.Sprintf("Web Server Is Down. This usually means: 1) Your IP is not whitelisted in WEEX API settings, 2) API endpoint is unreachable. Response body: %s", string(bodyBytes)),
 			}
 		}
-		
+
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			return &APIError{
@@ -189,7 +189,7 @@ func (c *Client) parseResponse(resp *http.Response, result interface{}) error {
 				Status:  resp.StatusCode,
 			}
 		}
-		
+
 		return &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       string(bodyBytes),
@@ -322,4 +322,3 @@ func (c *Client) SetLeverage(symbol string, marginMode int, longLeverage, shortL
 
 	return c.parseResponse(resp, nil)
 }
-

@@ -42,4 +42,3 @@ type ConfigError struct {
 func (e *ConfigError) Error() string {
 	return e.Message
 }
-

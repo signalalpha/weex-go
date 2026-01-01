@@ -47,4 +47,3 @@ func GetAuthHeaders(apiKey, secretKey, passphrase, method, requestPath, queryStr
 
 	return headers, nil
 }
-

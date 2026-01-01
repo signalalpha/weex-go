@@ -53,4 +53,3 @@ func DebugResponse(resp *http.Response) (string, error) {
 	debugInfo += fmt.Sprintf("Body: %s\n", string(bodyBytes))
 	return debugInfo, nil
 }
-

@@ -37,4 +37,3 @@ func IsHTTPError(err error) bool {
 	_, ok := err.(*HTTPError)
 	return ok
 }
-

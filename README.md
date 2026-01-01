@@ -16,6 +16,23 @@ WEEX 交易所官方 Go SDK
 go get github.com/signalalpha/weex-go
 ```
 
+## 示例
+
+查看 [examples/basic/main.go](examples/basic/main.go) 了解完整的使用示例。
+
+运行示例：
+
+```bash
+# 设置环境变量
+export WEEX_API_KEY="your_api_key"
+export WEEX_SECRET_KEY="your_secret_key"
+export WEEX_PASSPHRASE="your_passphrase"
+
+# 运行示例
+cd examples/basic
+go run main.go
+```
+
 ## 快速开始
 
 ### 基本使用
