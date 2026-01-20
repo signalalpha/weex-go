@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -60,6 +61,32 @@ func WithTimeout(timeout time.Duration) ClientOption {
 			c.httpClient = &http.Client{}
 		}
 		c.httpClient.Timeout = timeout
+		return nil
+	}
+}
+
+// WithProxy sets the HTTP proxy URL
+// Proxy format examples:
+//   - Without auth: http://proxy.example.com:3128
+//   - With auth: http://username:password@proxy.example.com:3128
+func WithProxy(proxyURL string) ClientOption {
+	return func(c *Client) error {
+		if proxyURL == "" {
+			return nil
+		}
+		if c.httpClient == nil {
+			c.httpClient = &http.Client{}
+		}
+		// Parse proxy URL
+		proxyURLParsed, err := url.Parse(proxyURL)
+		if err != nil {
+			return fmt.Errorf("invalid proxy URL: %w", err)
+		}
+		// Set proxy transport
+		transport := &http.Transport{
+			Proxy: http.ProxyURL(proxyURLParsed),
+		}
+		c.httpClient.Transport = transport
 		return nil
 	}
 }
@@ -121,7 +148,12 @@ func (c *Client) doRequest(method, path string, queryString string, body interfa
 
 	url := c.baseURL + path
 	if queryString != "" {
-		url += "?" + queryString
+		// If queryString already starts with "?", use it directly; otherwise add "?"
+		if queryString[0] == '?' {
+			url += queryString
+		} else {
+			url += "?" + queryString
+		}
 	}
 
 	var reqBody string
@@ -245,7 +277,8 @@ func (c *Client) GetAccountAssets() (AccountAssets, error) {
 // GetTicker retrieves ticker information for a symbol
 func (c *Client) GetTicker(symbol string) (*Ticker, error) {
 	path := "/capi/v2/market/ticker"
-	queryString := fmt.Sprintf("symbol=%s", symbol)
+	// Query string must include "?" for signature generation (matching Python implementation)
+	queryString := fmt.Sprintf("?symbol=%s", symbol)
 	resp, err := c.doRequest("GET", path, queryString, nil)
 	if err != nil {
 		return nil, err
@@ -304,6 +337,77 @@ func (c *Client) CancelOrder(orderID string) error {
 	}
 
 	return c.parseResponse(resp, nil)
+}
+
+// GetCurrentOrders retrieves current active orders for a symbol
+// Response format from /capi/v2/order/current:
+// - Direct array: [Order, ...]
+// - Or wrapped: {"data": [Order, ...]} or {"list": [Order, ...]}
+func (c *Client) GetCurrentOrders(symbol string) ([]Order, error) {
+	path := "/capi/v2/order/current"
+	// Query string must include "?" for signature generation (matching Python implementation)
+	queryString := fmt.Sprintf("?symbol=%s", symbol)
+	resp, err := c.doRequest("GET", path, queryString, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// For 521 errors, provide more helpful error message
+		if resp.StatusCode == 521 {
+			return nil, &HTTPError{
+				StatusCode: resp.StatusCode,
+				Body:       fmt.Sprintf("Web Server Is Down. This usually means: 1) Your IP is not whitelisted in WEEX API settings, 2) API endpoint is unreachable. Response body: %s", string(bodyBytes)),
+			}
+		}
+
+		var errResp ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
+			return nil, &APIError{
+				Code:    errResp.Code,
+				Message: errResp.Message,
+				Status:  resp.StatusCode,
+			}
+		}
+
+		return nil, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(bodyBytes),
+		}
+	}
+
+	// Try to parse as direct array first
+	var orders []Order
+	if err := json.Unmarshal(bodyBytes, &orders); err == nil {
+		return orders, nil
+	}
+
+	// Try to parse as wrapped response
+	type OrdersResponse struct {
+		Data []Order `json:"data,omitempty"`
+		List []Order `json:"list,omitempty"`
+	}
+
+	var wrappedResp OrdersResponse
+	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
+		if len(wrappedResp.Data) > 0 {
+			return wrappedResp.Data, nil
+		}
+		if len(wrappedResp.List) > 0 {
+			return wrappedResp.List, nil
+		}
+		// Empty wrapped response, return empty array
+		return []Order{}, nil
+	}
+
+	// If neither format works, return empty array (no orders)
+	return []Order{}, nil
 }
 
 // SetLeverage sets leverage for a symbol
