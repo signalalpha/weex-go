@@ -293,16 +293,107 @@ func (c *Client) GetTicker(symbol string) (*Ticker, error) {
 }
 
 // CreateOrder creates a new order
+// Converts Go SDK format to WEEX API format
 func (c *Client) CreateOrder(req *CreateOrderRequest) (*Order, error) {
 	path := "/capi/v2/order/placeOrder"
-	resp, err := c.doRequest("POST", path, "", req)
+
+	// Generate client_oid (timestamp in milliseconds)
+	clientOID := fmt.Sprintf("%d", time.Now().UnixMilli())
+
+	// Convert Side to API format: "buy" -> "1" (开多), "sell" -> "2" (开空)
+	var sideType string
+	if req.Side == OrderSideBuy {
+		sideType = "1"
+	} else if req.Side == OrderSideSell {
+		sideType = "2"
+	} else {
+		return nil, fmt.Errorf("invalid order side: %s", req.Side)
+	}
+
+	// Convert OrderType to match_price: "market" -> "1", "limit" -> "0"
+	var matchPrice string
+	if req.OrderType == OrderTypeMarket {
+		matchPrice = "1"
+	} else if req.OrderType == OrderTypeLimit {
+		matchPrice = "0"
+	} else {
+		return nil, fmt.Errorf("invalid order type: %s", req.OrderType)
+	}
+
+	// Build API request body in WEEX format
+	apiBody := map[string]interface{}{
+		"symbol":      req.Symbol,
+		"client_oid":  clientOID,
+		"size":        req.Quantity,
+		"type":        sideType,
+		"order_type":  "0", // Default: 普通订单
+		"match_price": matchPrice,
+	}
+
+	// Add price for limit orders
+	if req.OrderType == OrderTypeLimit {
+		if req.Price == "" {
+			return nil, fmt.Errorf("price is required for limit orders")
+		}
+		apiBody["price"] = req.Price
+	} else {
+		// For market orders, price is still required by API but may not be used
+		// Use a placeholder if not provided
+		if req.Price == "" {
+			apiBody["price"] = "0"
+		} else {
+			apiBody["price"] = req.Price
+		}
+	}
+
+	resp, err := c.doRequest("POST", path, "", apiBody)
 	if err != nil {
 		return nil, err
 	}
 
+	// Read response body to parse manually (API may return order_id directly)
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
+			return nil, &APIError{
+				Code:    errResp.Code,
+				Message: errResp.Message,
+				Status:  resp.StatusCode,
+			}
+		}
+		return nil, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(bodyBytes),
+		}
+	}
+
+	// Try to parse response - API may return order_id directly or wrapped
 	var order Order
-	if err := c.parseResponse(resp, &order); err != nil {
-		return nil, err
+
+	// First try to parse as APIResponse wrapper
+	var apiResp APIResponse
+	if err := json.Unmarshal(bodyBytes, &apiResp); err == nil && apiResp.Code == 0 {
+		// Success response with data field
+		if apiResp.Data != nil {
+			dataBytes, err := json.Marshal(apiResp.Data)
+			if err == nil {
+				json.Unmarshal(dataBytes, &order)
+			}
+		}
+	} else {
+		// Try direct unmarshal (response is the order object directly)
+		json.Unmarshal(bodyBytes, &order)
+	}
+
+	// If OrderID is empty but OrderIDAlt is set, copy it
+	if order.OrderID == "" && order.OrderIDAlt != "" {
+		order.OrderID = order.OrderIDAlt
 	}
 
 	return &order, nil
@@ -425,4 +516,168 @@ func (c *Client) SetLeverage(symbol string, marginMode int, longLeverage, shortL
 	}
 
 	return c.parseResponse(resp, nil)
+}
+
+// TradeFillsOptions contains optional parameters for GetTradeFills
+type TradeFillsOptions struct {
+	OrderId   string // optional order ID to filter by
+	StartTime int64  // optional start time in milliseconds
+	EndTime   int64  // optional end time in milliseconds
+	PageSize  int    // optional page size (default 10, max 100)
+}
+
+// GetTradeFillsDebug retrieves filled orders with debug info (returns query string and raw response)
+func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (TradeFills, string, string, error) {
+	path := "/capi/v2/order/fills"
+
+	pageSize := 100
+	if opts != nil && opts.PageSize > 0 {
+		pageSize = opts.PageSize
+		if pageSize > 100 {
+			pageSize = 100
+		}
+	}
+
+	queryString := fmt.Sprintf("?symbol=%s&pageSize=%d", symbol, pageSize)
+	if opts != nil {
+		if opts.OrderId != "" {
+			queryString += fmt.Sprintf("&orderId=%s", opts.OrderId)
+		}
+		if opts.StartTime > 0 {
+			queryString += fmt.Sprintf("&startTime=%d", opts.StartTime)
+		}
+		if opts.EndTime > 0 {
+			queryString += fmt.Sprintf("&endTime=%d", opts.EndTime)
+		}
+	}
+
+	url := c.baseURL + path + queryString
+	resp, err := c.doRequest("GET", path, queryString, nil)
+	if err != nil {
+		return nil, url, "", err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, url, "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	rawResponse := string(bodyBytes)
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
+			return nil, url, rawResponse, &APIError{
+				Code:    errResp.Code,
+				Message: errResp.Message,
+				Status:  resp.StatusCode,
+			}
+		}
+		return nil, url, rawResponse, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       rawResponse,
+		}
+	}
+
+	var fills TradeFills
+	if err := json.Unmarshal(bodyBytes, &fills); err == nil {
+		return fills, url, rawResponse, nil
+	}
+
+	type FillsResponse struct {
+		Data TradeFills `json:"data,omitempty"`
+		List TradeFills `json:"list,omitempty"`
+	}
+
+	var wrappedResp FillsResponse
+	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
+		if len(wrappedResp.Data) > 0 {
+			return wrappedResp.Data, url, rawResponse, nil
+		}
+		if len(wrappedResp.List) > 0 {
+			return wrappedResp.List, url, rawResponse, nil
+		}
+		return TradeFills{}, url, rawResponse, nil
+	}
+
+	return TradeFills{}, url, rawResponse, nil
+}
+
+// GetTradeFills retrieves filled orders (trade details) for a symbol
+func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFills, error) {
+	path := "/capi/v2/order/fills"
+
+	// Default pageSize to 100 for maximum results
+	pageSize := 100
+	if opts != nil && opts.PageSize > 0 {
+		pageSize = opts.PageSize
+		if pageSize > 100 {
+			pageSize = 100
+		}
+	}
+
+	queryString := fmt.Sprintf("?symbol=%s&pageSize=%d", symbol, pageSize)
+	if opts != nil {
+		if opts.OrderId != "" {
+			queryString += fmt.Sprintf("&orderId=%s", opts.OrderId)
+		}
+		if opts.StartTime > 0 {
+			queryString += fmt.Sprintf("&startTime=%d", opts.StartTime)
+		}
+		if opts.EndTime > 0 {
+			queryString += fmt.Sprintf("&endTime=%d", opts.EndTime)
+		}
+	}
+	resp, err := c.doRequest("GET", path, queryString, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
+			return nil, &APIError{
+				Code:    errResp.Code,
+				Message: errResp.Message,
+				Status:  resp.StatusCode,
+			}
+		}
+		return nil, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(bodyBytes),
+		}
+	}
+
+	// Try to parse as direct array first
+	var fills TradeFills
+	if err := json.Unmarshal(bodyBytes, &fills); err == nil {
+		return fills, nil
+	}
+
+	// Try to parse as wrapped response
+	type FillsResponse struct {
+		Data TradeFills `json:"data,omitempty"`
+		List TradeFills `json:"list,omitempty"`
+	}
+
+	var wrappedResp FillsResponse
+	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
+		if len(wrappedResp.Data) > 0 {
+			return wrappedResp.Data, nil
+		}
+		if len(wrappedResp.List) > 0 {
+			return wrappedResp.List, nil
+		}
+		return TradeFills{}, nil
+	}
+
+	// If neither format works, return empty array
+	return TradeFills{}, nil
 }
