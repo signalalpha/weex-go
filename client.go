@@ -523,22 +523,22 @@ type TradeFillsOptions struct {
 	OrderId   string // optional order ID to filter by
 	StartTime int64  // optional start time in milliseconds
 	EndTime   int64  // optional end time in milliseconds
-	PageSize  int    // optional page size (default 10, max 100)
+	Limit     int    // optional limit (default 100, max 100)
 }
 
 // GetTradeFillsDebug retrieves filled orders with debug info (returns query string and raw response)
-func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (TradeFills, string, string, error) {
+func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (TradeFillsResult, string, string, error) {
 	path := "/capi/v2/order/fills"
 
-	pageSize := 100
-	if opts != nil && opts.PageSize > 0 {
-		pageSize = opts.PageSize
-		if pageSize > 100 {
-			pageSize = 100
+	limit := 100
+	if opts != nil && opts.Limit > 0 {
+		limit = opts.Limit
+		if limit > 100 {
+			limit = 100
 		}
 	}
 
-	queryString := fmt.Sprintf("?symbol=%s&pageSize=%d", symbol, pageSize)
+	queryString := fmt.Sprintf("?symbol=%s&limit=%d", symbol, limit)
 	if opts != nil {
 		if opts.OrderId != "" {
 			queryString += fmt.Sprintf("&orderId=%s", opts.OrderId)
@@ -554,13 +554,13 @@ func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (Tra
 	url := c.baseURL + path + queryString
 	resp, err := c.doRequest("GET", path, queryString, nil)
 	if err != nil {
-		return nil, url, "", err
+		return TradeFillsResult{}, url, "", err
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, url, "", fmt.Errorf("failed to read response body: %w", err)
+		return TradeFillsResult{}, url, "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	rawResponse := string(bodyBytes)
@@ -568,56 +568,44 @@ func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (Tra
 	if resp.StatusCode != http.StatusOK {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
-			return nil, url, rawResponse, &APIError{
+			return TradeFillsResult{}, url, rawResponse, &APIError{
 				Code:    errResp.Code,
 				Message: errResp.Message,
 				Status:  resp.StatusCode,
 			}
 		}
-		return nil, url, rawResponse, &HTTPError{
+		return TradeFillsResult{}, url, rawResponse, &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       rawResponse,
 		}
 	}
 
-	var fills TradeFills
-	if err := json.Unmarshal(bodyBytes, &fills); err == nil {
-		return fills, url, rawResponse, nil
+	// Parse response with totals and nextFlag
+	var result TradeFillsResult
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		return TradeFillsResult{}, url, rawResponse, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	type FillsResponse struct {
-		Data TradeFills `json:"data,omitempty"`
-		List TradeFills `json:"list,omitempty"`
-	}
-
-	var wrappedResp FillsResponse
-	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
-		if len(wrappedResp.Data) > 0 {
-			return wrappedResp.Data, url, rawResponse, nil
-		}
-		if len(wrappedResp.List) > 0 {
-			return wrappedResp.List, url, rawResponse, nil
-		}
-		return TradeFills{}, url, rawResponse, nil
-	}
-
-	return TradeFills{}, url, rawResponse, nil
+	return result, url, rawResponse, nil
 }
 
 // GetTradeFills retrieves filled orders (trade details) for a symbol
-func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFills, error) {
+// Returns TradeFillsResult containing fills, totals, and nextFlag.
+// Note: API does not support traditional pagination. If nextFlag is true,
+// use time range splitting (startTime/endTime) to fetch all data.
+func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFillsResult, error) {
 	path := "/capi/v2/order/fills"
 
-	// Default pageSize to 100 for maximum results
-	pageSize := 100
-	if opts != nil && opts.PageSize > 0 {
-		pageSize = opts.PageSize
-		if pageSize > 100 {
-			pageSize = 100
+	// Default limit to 100 for maximum results
+	limit := 100
+	if opts != nil && opts.Limit > 0 {
+		limit = opts.Limit
+		if limit > 100 {
+			limit = 100
 		}
 	}
 
-	queryString := fmt.Sprintf("?symbol=%s&pageSize=%d", symbol, pageSize)
+	queryString := fmt.Sprintf("?symbol=%s&limit=%d", symbol, limit)
 	if opts != nil {
 		if opts.OrderId != "" {
 			queryString += fmt.Sprintf("&orderId=%s", opts.OrderId)
@@ -631,53 +619,35 @@ func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFil
 	}
 	resp, err := c.doRequest("GET", path, queryString, nil)
 	if err != nil {
-		return nil, err
+		return TradeFillsResult{}, err
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return TradeFillsResult{}, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
-			return nil, &APIError{
+			return TradeFillsResult{}, &APIError{
 				Code:    errResp.Code,
 				Message: errResp.Message,
 				Status:  resp.StatusCode,
 			}
 		}
-		return nil, &HTTPError{
+		return TradeFillsResult{}, &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       string(bodyBytes),
 		}
 	}
 
-	// Try to parse as direct array first
-	var fills TradeFills
-	if err := json.Unmarshal(bodyBytes, &fills); err == nil {
-		return fills, nil
+	// Parse response with totals and nextFlag
+	var result TradeFillsResult
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		return TradeFillsResult{}, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Try to parse as wrapped response
-	type FillsResponse struct {
-		Data TradeFills `json:"data,omitempty"`
-		List TradeFills `json:"list,omitempty"`
-	}
-
-	var wrappedResp FillsResponse
-	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
-		if len(wrappedResp.Data) > 0 {
-			return wrappedResp.Data, nil
-		}
-		if len(wrappedResp.List) > 0 {
-			return wrappedResp.List, nil
-		}
-		return TradeFills{}, nil
-	}
-
-	// If neither format works, return empty array
-	return TradeFills{}, nil
+	return result, nil
 }

@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/signalalpha/weex-go"
+	weexgo "github.com/signalalpha/weex-go"
 )
 
 // This is a basic example demonstrating how to use the weex-go SDK
@@ -37,7 +37,7 @@ func main() {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 
-	fmt.Println("=== WEEX Go SDK Basic Example ===\n")
+	fmt.Println("=== WEEX Go SDK Basic Example ===")
 
 	// Example 1: Get account assets
 	fmt.Println("1. Getting account assets...")
