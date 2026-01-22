@@ -145,13 +145,3 @@ func (t *TradeFill) GetTradeID() string {
 
 // TradeFills represents a list of trade fills
 type TradeFills []TradeFill
-
-// TradeFillsResult represents the response from GetTradeFills API
-// Contains pagination info: totals (total count) and nextFlag (has more data)
-// Note: API does not support traditional pagination. If nextFlag is true or totals > limit,
-// use time range splitting (startTime/endTime) to fetch all data.
-type TradeFillsResult struct {
-	Fills    TradeFills `json:"list"`     // list of trade fills
-	Totals   int        `json:"totals"`   // total number of records
-	NextFlag bool       `json:"nextFlag"` // true if there are more records (need to split time range)
-}

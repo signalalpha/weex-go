@@ -527,7 +527,7 @@ type TradeFillsOptions struct {
 }
 
 // GetTradeFillsDebug retrieves filled orders with debug info (returns query string and raw response)
-func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (TradeFillsResult, string, string, error) {
+func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (TradeFills, string, string, error) {
 	path := "/capi/v2/order/fills"
 
 	limit := 100
@@ -554,13 +554,13 @@ func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (Tra
 	url := c.baseURL + path + queryString
 	resp, err := c.doRequest("GET", path, queryString, nil)
 	if err != nil {
-		return TradeFillsResult{}, url, "", err
+		return nil, url, "", err
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return TradeFillsResult{}, url, "", fmt.Errorf("failed to read response body: %w", err)
+		return nil, url, "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	rawResponse := string(bodyBytes)
@@ -568,32 +568,46 @@ func (c *Client) GetTradeFillsDebug(symbol string, opts *TradeFillsOptions) (Tra
 	if resp.StatusCode != http.StatusOK {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
-			return TradeFillsResult{}, url, rawResponse, &APIError{
+			return nil, url, rawResponse, &APIError{
 				Code:    errResp.Code,
 				Message: errResp.Message,
 				Status:  resp.StatusCode,
 			}
 		}
-		return TradeFillsResult{}, url, rawResponse, &HTTPError{
+		return nil, url, rawResponse, &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       rawResponse,
 		}
 	}
 
-	// Parse response with totals and nextFlag
-	var result TradeFillsResult
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		return TradeFillsResult{}, url, rawResponse, fmt.Errorf("failed to parse response: %w", err)
+	// Try to parse as direct array first
+	var fills TradeFills
+	if err := json.Unmarshal(bodyBytes, &fills); err == nil {
+		return fills, url, rawResponse, nil
 	}
 
-	return result, url, rawResponse, nil
+	// Try to parse as wrapped response
+	type FillsResponse struct {
+		Data TradeFills `json:"data,omitempty"`
+		List TradeFills `json:"list,omitempty"`
+	}
+
+	var wrappedResp FillsResponse
+	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
+		if len(wrappedResp.Data) > 0 {
+			return wrappedResp.Data, url, rawResponse, nil
+		}
+		if len(wrappedResp.List) > 0 {
+			return wrappedResp.List, url, rawResponse, nil
+		}
+		return TradeFills{}, url, rawResponse, nil
+	}
+
+	return TradeFills{}, url, rawResponse, nil
 }
 
 // GetTradeFills retrieves filled orders (trade details) for a symbol
-// Returns TradeFillsResult containing fills, totals, and nextFlag.
-// Note: API does not support traditional pagination. If nextFlag is true,
-// use time range splitting (startTime/endTime) to fetch all data.
-func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFillsResult, error) {
+func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFills, error) {
 	path := "/capi/v2/order/fills"
 
 	// Default limit to 100 for maximum results
@@ -619,35 +633,53 @@ func (c *Client) GetTradeFills(symbol string, opts *TradeFillsOptions) (TradeFil
 	}
 	resp, err := c.doRequest("GET", path, queryString, nil)
 	if err != nil {
-		return TradeFillsResult{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return TradeFillsResult{}, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
-			return TradeFillsResult{}, &APIError{
+			return nil, &APIError{
 				Code:    errResp.Code,
 				Message: errResp.Message,
 				Status:  resp.StatusCode,
 			}
 		}
-		return TradeFillsResult{}, &HTTPError{
+		return nil, &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       string(bodyBytes),
 		}
 	}
 
-	// Parse response with totals and nextFlag
-	var result TradeFillsResult
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		return TradeFillsResult{}, fmt.Errorf("failed to parse response: %w", err)
+	// Try to parse as direct array first
+	var fills TradeFills
+	if err := json.Unmarshal(bodyBytes, &fills); err == nil {
+		return fills, nil
 	}
 
-	return result, nil
+	// Try to parse as wrapped response
+	type FillsResponse struct {
+		Data TradeFills `json:"data,omitempty"`
+		List TradeFills `json:"list,omitempty"`
+	}
+
+	var wrappedResp FillsResponse
+	if err := json.Unmarshal(bodyBytes, &wrappedResp); err == nil {
+		if len(wrappedResp.Data) > 0 {
+			return wrappedResp.Data, nil
+		}
+		if len(wrappedResp.List) > 0 {
+			return wrappedResp.List, nil
+		}
+		return TradeFills{}, nil
+	}
+
+	// If neither format works, return empty array
+	return TradeFills{}, nil
 }

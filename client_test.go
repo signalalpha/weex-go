@@ -8,40 +8,36 @@ import (
 )
 
 func TestGetTradeFills(t *testing.T) {
-	// Mock API response
-	mockResponse := map[string]interface{}{
-		"list": []map[string]interface{}{
-			{
-				"tradeId":      12345,
-				"orderId":      67890,
-				"symbol":       "cmt_btcusdt",
-				"marginMode":   "SHARED",
-				"positionSide": "LONG",
-				"orderSide":    "BUY",
-				"fillSize":     "0.001",
-				"fillValue":    "50.00",
-				"fillFee":      "0.05",
-				"realizePnl":   "0",
-				"direction":    "TAKER",
-				"createdTime":  1705900800000,
-			},
-			{
-				"tradeId":      12346,
-				"orderId":      67891,
-				"symbol":       "cmt_btcusdt",
-				"marginMode":   "SHARED",
-				"positionSide": "SHORT",
-				"orderSide":    "SELL",
-				"fillSize":     "0.002",
-				"fillValue":    "100.00",
-				"fillFee":      "0.10",
-				"realizePnl":   "1.50",
-				"direction":    "MAKER",
-				"createdTime":  1705900900000,
-			},
+	// Mock API response - direct array format
+	mockResponse := []map[string]interface{}{
+		{
+			"tradeId":      12345,
+			"orderId":      67890,
+			"symbol":       "cmt_btcusdt",
+			"marginMode":   "SHARED",
+			"positionSide": "LONG",
+			"orderSide":    "BUY",
+			"fillSize":     "0.001",
+			"fillValue":    "50.00",
+			"fillFee":      "0.05",
+			"realizePnl":   "0",
+			"direction":    "TAKER",
+			"createdTime":  1705900800000,
 		},
-		"totals":   150,
-		"nextFlag": true,
+		{
+			"tradeId":      12346,
+			"orderId":      67891,
+			"symbol":       "cmt_btcusdt",
+			"marginMode":   "SHARED",
+			"positionSide": "SHORT",
+			"orderSide":    "SELL",
+			"fillSize":     "0.002",
+			"fillValue":    "100.00",
+			"fillFee":      "0.10",
+			"realizePnl":   "1.50",
+			"direction":    "MAKER",
+			"createdTime":  1705900900000,
+		},
 	}
 
 	// Create mock server
@@ -75,37 +71,28 @@ func TestGetTradeFills(t *testing.T) {
 	}
 
 	// Call GetTradeFills
-	result, err := client.GetTradeFills("cmt_btcusdt", nil)
+	fills, err := client.GetTradeFills("cmt_btcusdt", nil)
 	if err != nil {
 		t.Fatalf("GetTradeFills failed: %v", err)
 	}
 
 	// Verify results
-	if len(result.Fills) != 2 {
-		t.Errorf("Expected 2 fills, got %d", len(result.Fills))
-	}
-	if result.Totals != 150 {
-		t.Errorf("Expected totals=150, got %d", result.Totals)
-	}
-	if !result.NextFlag {
-		t.Error("Expected nextFlag=true, got false")
+	if len(fills) != 2 {
+		t.Errorf("Expected 2 fills, got %d", len(fills))
 	}
 
 	// Verify first fill
-	if result.Fills[0].TradeID != 12345 {
-		t.Errorf("Expected tradeId=12345, got %d", result.Fills[0].TradeID)
+	if fills[0].TradeID != 12345 {
+		t.Errorf("Expected tradeId=12345, got %d", fills[0].TradeID)
 	}
-	if result.Fills[0].Symbol != "cmt_btcusdt" {
-		t.Errorf("Expected symbol=cmt_btcusdt, got %s", result.Fills[0].Symbol)
+	if fills[0].Symbol != "cmt_btcusdt" {
+		t.Errorf("Expected symbol=cmt_btcusdt, got %s", fills[0].Symbol)
 	}
 }
 
 func TestGetTradeFillsWithOptions(t *testing.T) {
-	mockResponse := map[string]interface{}{
-		"list":     []map[string]interface{}{},
-		"totals":   0,
-		"nextFlag": false,
-	}
+	// Mock API response - empty array
+	mockResponse := []map[string]interface{}{}
 
 	var capturedQuery string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,11 +128,8 @@ func TestGetTradeFillsWithOptions(t *testing.T) {
 }
 
 func TestGetTradeFillsLimitCap(t *testing.T) {
-	mockResponse := map[string]interface{}{
-		"list":     []map[string]interface{}{},
-		"totals":   0,
-		"nextFlag": false,
-	}
+	// Mock API response - empty array
+	mockResponse := []map[string]interface{}{}
 
 	var capturedLimit string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,22 +153,6 @@ func TestGetTradeFillsLimitCap(t *testing.T) {
 
 	if capturedLimit != "100" {
 		t.Errorf("Expected limit to be capped at 100, got %s", capturedLimit)
-	}
-}
-
-func TestTradeFillsResultNextFlag(t *testing.T) {
-	// Test case: nextFlag indicates more data available
-	result := TradeFillsResult{
-		Fills:    make(TradeFills, 100),
-		Totals:   250,
-		NextFlag: true,
-	}
-
-	if !result.NextFlag {
-		t.Error("NextFlag should be true when there are more records")
-	}
-	if result.Totals <= 100 {
-		t.Error("Totals should be greater than limit when NextFlag is true")
 	}
 }
 
